@@ -10,7 +10,7 @@ import {
   parsePost,
   planTargets,
   platformLength,
-} from "./core.ts";
+} from "../src/lib/core.ts";
 
 const channel = (over: Partial<Record<string, unknown>> = {}) =>
   parseChannel({ id: 1, platform: "x", accountName: "Acme", isActive: true, tokenStatus: "valid", ...over }) as Channel;
@@ -98,4 +98,43 @@ test("apiErrorMessage gives an actionable sentence", () => {
   assert.match(apiErrorMessage(403, { error: { code: "APPROVAL_REQUIRED", message: "x" } }), /approval/);
   assert.equal(apiErrorMessage(400, { error: { message: "Bad date", code: "VALIDATION" } }), "Bad date");
   assert.match(apiErrorMessage(503, null), /trouble/);
+});
+
+test("planTargets skips channels that can't take the attachments", () => {
+  const ch = (id: number, platform: string) => channel({ id, platform, accountName: platform });
+  const all = ["x", "instagram", "threads", "gmb", "snapchat", "linkedin", "pinterest", "facebook"].map((p, i) =>
+    ch(i + 1, p),
+  );
+  const ids = all.map((c) => c.id);
+  const reasons = (media: "image" | "video" | null, count: number) =>
+    Object.fromEntries(planTargets(all, ids, media, count).skipped.map((s) => [s.channel.platform, s.reason]));
+
+  assert.deepEqual(reasons("image", 1), {});
+  assert.deepEqual(reasons("image", 2), { gmb: "takes one image per post", snapchat: "takes one image per post" });
+  assert.deepEqual(reasons("image", 6), {
+    x: "takes up to 4 images per post",
+    gmb: "takes one image per post",
+    snapchat: "takes one image per post",
+    pinterest: "takes up to 5 images per post",
+  });
+  assert.equal(reasons("image", 11).instagram, "takes up to 10 images per post");
+  assert.deepEqual(reasons("video", 1), { gmb: "can't take a video" });
+});
+
+test("buildPostBody asks for the post type the attachments need", () => {
+  const ch = (id: number, platform: string) => channel({ id, platform });
+  const targets = ["instagram", "threads", "pinterest", "linkedin", "x"].map((p, i) => ch(i + 1, p));
+  assert.deepEqual(buildPostBody(targets, "", [1], "image", undefined).postTypeOverrides, { threads: "image" });
+  assert.deepEqual(buildPostBody(targets, "", [1, 2, 3], "image", undefined).postTypeOverrides, {
+    instagram: "carousel",
+    threads: "carousel",
+    pinterest: "carousel",
+    linkedin: "multi_image",
+  });
+  assert.deepEqual(buildPostBody(targets, "", [1], "video", undefined).postTypeOverrides, {
+    instagram: "reel",
+    threads: "video",
+    pinterest: "video_pin",
+  });
+  assert.equal("postTypeOverrides" in buildPostBody(targets, "Hi", [], null), false);
 });
